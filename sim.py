@@ -111,135 +111,165 @@ out_config = {
 
 """ Rack Selection Algorithm (Source & Destination) """
 
+
 def source_rack_selection(list_of_racks, required_gold):
-    """ 
-    Should select the rack with least remianing capacity 
-    but should also prefer rack with suffient gold
+    """
+    Selects the best source rack for both buying (out racks) and selling (in racks).
+    
+    1. Finds racks with at the required_gold.
+    2. Selects the rack with the minimum remaining capacity.
     """
     selected_rack = None
+    min_remaining_capacity = float('inf')
 
     for rack in list_of_racks:
         remaining_capacity = rack.capacity - rack.quantity
 
-        #prefer rack with sufient gold 
-        if rack.quantity >= required_gold:
-            if selected_rack is None or selected_rack.quantity < required_gold or remaining_capacity < (selected_rack.capacity - selected_rack.quantity):
+        if rack.quantity >= required_gold:  
+            if remaining_capacity < min_remaining_capacity:
                 selected_rack = rack
-        else:
-            # use rebalancing
-            if selected_rack is None or (selected_rack.quantity < required_gold and selected_rack.capacity - selected_rack.quantity > remaining_capacity):
-                selected_rack = rack
+                min_remaining_capacity = remaining_capacity
 
-    return selected_rack
+    return selected_rack  
 
-def destination_rack_selection(list_of_racks):
-    """ Selects the rack with the most remaining capacity (most available space) """
+
+
+
+
+def destination_rack_selection(list_of_racks, required_gold):
+    """
+    Selects the best destination rack for both buying (in racks) and selling (out racks).
+    
+    1. Finds racks with enough free space for requried gold 
+    2. Selects the rack with the minimum remaining capacity.
+    """
     selected_rack = None
+    min_remaining_capacity = float('inf')
+
     for rack in list_of_racks:
         remaining_capacity = rack.capacity - rack.quantity
-        if selected_rack is None or (selected_rack.capacity - selected_rack.quantity < remaining_capacity):
-            selected_rack = rack
-    return selected_rack
+
+        if remaining_capacity >= required_gold:
+            if remaining_capacity < min_remaining_capacity:
+                selected_rack = rack
+                min_remaining_capacity = remaining_capacity
+
+    return selected_rack  
+
 
 
 """ Out Rack Rebalancing """
-
-def rack_balancing_out(out_rack, warehouse, req_gold):
-    """ 
-    Ensures the out rack has enough gold to fulfill a transaction.
-    Transfers gold from the warehouse if needed.
+def rebalance_out_racks(out_racks, warehouse):
     """
-    if out_rack.quantity >= req_gold:
-        return True  
+    Rebalances OUT racks by taking gold from the warehouse only.
+    """
 
-    shortfall = req_gold - out_rack.quantity
+    if warehouse.quantity <= 0:
+        print(" Warehouse has no sufficient amout of gold .")
+        return
 
-    if warehouse.quantity >= shortfall:
-        out_rack.quantity += shortfall
-        warehouse.quantity -= shortfall
-        return True  
+    
+    for i in range(len(out_racks) - 1):
+        for j in range(i + 1, len(out_racks)):
+            if out_racks[i].remaining_capacity() > out_racks[j].remaining_capacity():
+                out_racks[i], out_racks[j] = out_racks[j], out_racks[i]
 
-    print("Transaction failed: Not enough gold in the warehouse.")
-    return False  
+    for rack in out_racks:
+        if warehouse.quantity <= 0:
+            break
+
+        remaining_capacity = rack.remaining_capacity()
+        if remaining_capacity > 0:
+            gold_to_transfer = min(remaining_capacity, warehouse.quantity)
+            rack.quantity += gold_to_transfer
+            warehouse.quantity -= gold_to_transfer
+            print(f"Moved {gold_to_transfer:.3f} gm from Warehouse to {rack}")
+
+    print("✅ Rebalancing done !\n")
+
 
 
 """ In Rack Rebalancing """
-def rack_balancing_in(in_rack, in_racks, required_gold):
-    """ 
-    Transfers gold from other IN racks if the selected rack lacks enough for a transaction.
-    Ensures rebalancing from multiple racks if needed.
+
+
+def rebalance_in_racks(in_racks):
     """
-    if in_rack.quantity >= required_gold:
-        return True  # No need for rebalancing
+    Rebalances IN racks by redistributing gold among themselves.
+    It does NOT take gold from the warehouse.
+    """
 
-    shortfall = required_gold - in_rack.quantity
-    donor_candidates = sorted(
+    total_gold = sum(rack.quantity for rack in in_racks) 
+    total_capacity = sum(rack.capacity for rack in in_racks)  
 
-        [rack for rack in in_racks if rack != in_rack and rack.quantity > 0],
-        key=lambda rack: rack.quantity,
-        reverse=True
-    )  # Sort donors by quantity (highest first)
+    if total_gold == 0:
+        print("No gold available in IN racks for rebalancing.")
+        return
 
-    if not donor_candidates:
-        print("Transaction failed: No available IN racks for rebalancing.")
-        return False
+    avg_gold_per_rack = total_gold / len(in_racks)
 
-    # Distribute shortfall acros multiple inrack
-    for donor_rack in donor_candidates:
-        transfer_amount = min(donor_rack.quantity, shortfall)
-        in_rack.quantity += transfer_amount
-        donor_rack.quantity -= transfer_amount
-        shortfall -= transfer_amount
+    for rack in in_racks:
+        rack.quantity = min(avg_gold_per_rack, rack.capacity)  
 
-        if shortfall == 0:  # check is that rebalancde 
-            return True  
-
-    print("Transaction failed: No enough gold after rebalancing.")
-    return False 
+    print(" Rebalancing complete: Gold redistributed among IN racks.")
 
 
 """ Sell Transaction with Rebalancing """
-def sell_transaction(in_racks, out_racks, sell_quantity):
-    source_in_rack = source_rack_selection(in_racks, sell_quantity)
-    destination_out_rack = destination_rack_selection(out_racks)
+def seller_action(in_racks, out_racks, required_gold):
+    """
+    Handles the selling process:
+    1. Selects the best source rack from IN racks.
+    2. Selects the best destination rack from OUT racks.
+    3. Moves gold from IN to OUT racks.
+    4. If insufficient gold, rebalances IN racks and retries.
+    """
+    source_rack = source_rack_selection(in_racks, required_gold)
 
-    if source_in_rack.quantity >= sell_quantity:
-        source_in_rack.quantity -= sell_quantity
-        destination_out_rack.quantity += sell_quantity
-        return True  
+    if not source_rack:
+        print("Insufficient gold in IN racks! Rebalancing...")
+        rebalance_in_racks(in_racks)
+        source_rack = source_rack_selection(in_racks, required_gold)
 
-    shortfall = sell_quantity - source_in_rack.quantity
+    if source_rack:
+        destination_rack = destination_rack_selection(out_racks, required_gold)
 
-    if rack_balancing_in(source_in_rack, in_racks, shortfall):
-        if source_in_rack.quantity >= sell_quantity:
-            source_in_rack.quantity -= sell_quantity
-            destination_out_rack.quantity += sell_quantity
-            return True  
-
-    print("Transaction failed: Not enough gold available for selling.")
-    return False
+        if destination_rack:
+            source_rack.quantity -= required_gold
+            destination_rack.quantity += required_gold
+            print(f" Sold {required_gold} gm from {source_rack} to {destination_rack}")
+        else:
+            print("No suitable OUT rack found for storage!")
+    else:
+        print("Still insufficient gold after rebalancing!")
 
 
 """ Buy Transaction with Rebalancing """
 
-def buy_transaction(in_racks, out_racks, buy_quantity, warehouse):
-    source_out_rack = source_rack_selection(out_racks, buy_quantity)  # Take from an OUT rack
-    destination_in_rack = destination_rack_selection(in_racks)  # Move to an IN rack
+def buyer_action(out_racks, in_racks, required_gold):
+    """
+    Handles the buying process:
+    1. Selects the best source rack from OUT racks.
+    2. Selects the best destination rack from IN racks.
+    3. Moves gold from OUT to IN racks.
+    4. If insufficient gold, rebalances OUT racks and retries.
+    """
+    source_rack = source_rack_selection(out_racks, required_gold)
 
-    if source_out_rack.quantity >= buy_quantity:
-        source_out_rack.quantity -= buy_quantity
-        destination_in_rack.quantity += buy_quantity
-        return True  
+    if not source_rack:
+        print("Insufficient gold in OUT racks! Rebalancing...")
+        rebalance_out_racks(out_racks)
+        source_rack = source_rack_selection(out_racks, required_gold)
 
-    shortfall = buy_quantity - source_out_rack.quantity
+    if source_rack:
+        destination_rack = destination_rack_selection(in_racks, required_gold)
 
-    if rack_balancing_out(source_out_rack, warehouse, shortfall):
-        source_out_rack.quantity -= buy_quantity
-        destination_in_rack.quantity += buy_quantity
-        return True  
-
-    print("Transaction failed: Not enough gold available for buying.")
-    return False
+        if destination_rack:
+            source_rack.quantity -= required_gold
+            destination_rack.quantity += required_gold
+            print(f" Bought {required_gold} gm from {source_rack} to {destination_rack}")
+        else:
+            print(" No suitable IN rack found for storage!")
+    else:
+        print(" Still insufficient gold after rebalancing!")
 
 
 
@@ -261,35 +291,33 @@ def print_rack_status(in_racks, out_racks, warehouse):
     print("===========================\n")
 
 
-def test_transactions(in_racks, out_racks, warehouse, buy_range, sell_range):
-    print("Starting Simulation...\n")
+import random
+
+
+def test_gold_transactions(in_racks, out_racks, warehouse, buy_range, sell_range):
+    print("\n Staring the transaction\n")
+
     print_rack_status(in_racks, out_racks, warehouse)
 
 
     buy_qty = round(random.uniform(*buy_range), 3)
-    print(f"Buying {buy_qty} gm of gold...")
-    buy_transaction(in_racks, out_racks, buy_qty, warehouse)
+    print(f"\n Attempting to BUY {buy_qty} gm of gold...")
+    buyer_action(out_racks, in_racks, buy_qty)
     print_rack_status(in_racks, out_racks, warehouse)
 
-  
+
     sell_qty = round(random.uniform(*sell_range), 3)
-    print(f"Selling {sell_qty} gm of gold...")
-    sell_transaction(in_racks, out_racks, sell_qty)
+    print(f"\n Attempting to SELL {sell_qty} gm of gold...")
+    seller_action(in_racks, out_racks, sell_qty)
     print_rack_status(in_racks, out_racks, warehouse)
 
    
     sell_qty = round(random.uniform(*sell_range), 3)
-    print(f"Selling {sell_qty} gm of gold...")
-    sell_transaction(in_racks, out_racks, sell_qty)
+    print(f"\n Attempting to SELL {sell_qty} gm of gold...")
+    seller_action(in_racks, out_racks, sell_qty)
     print_rack_status(in_racks, out_racks, warehouse)
 
-    print("Simulation Complete!\n")
+    print("End")
 
 # Run the test
-test_transactions(in_config["racks"], out_config["racks"], warehouse, buy_transaction_range, sell_transaction_range)
-
-
-
-
-
-
+test_gold_transactions(in_config["racks"], out_config["racks"], warehouse, buy_transaction_range, sell_transaction_range)
